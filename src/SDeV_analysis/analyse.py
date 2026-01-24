@@ -158,7 +158,14 @@ class SurveyAnalysis:
             .reset_index()
             .rename(columns={"REF": "Ref"})
         )
-
+        # Normalize "Ref" columns for merging
+        for df in (link_pd, response_rate_pd):
+            df["Ref"] = (
+                df["Ref"]
+                .astype(str)
+                .str.strip()
+                .str.lower()
+            )
         merged_pd = pd.merge(
             link_pd, response_rate_pd, on="Ref", how="left"
         )
