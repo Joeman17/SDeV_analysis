@@ -36,40 +36,89 @@ class SurveySchema:
     # ------------------------------------------------------------------
 
     def _init_specs(self):
-        singlechoice_pattern = re.compile(r"A\d+$")
-        multichoice_pattern = re.compile(r"\d+_\d+$")
+        """
+        Initialize VariableSpec objects based on column structure.
 
-        singlechoice_cols = [
-            col for col in self.df_variables.keys()
-            if singlechoice_pattern.search(col)
-        ]
+        Rules:
+        - only one column and it is Axyz_[0-9]+
+            → text
+        - Axyz exists and exactly one Axyz_[0-9]+ exists
+            → singlechoice + free text
+        - Axyz exists and >1 Axyz_[0-9]+ exist
+            → multichoice
+        - Axyz exists and no suffixed columns
+            → singlechoice
+        """
 
+
+        suffix_pattern = re.compile(r"^(?P<base>.+)_(?P<idx>[0-9]+)$")
+
+        all_cols = list(self.df_variables.keys())
+
+        # --------------------------------------------------
+        # group columns by base name
+        # --------------------------------------------------
         groups = defaultdict(list)
-
-        for col in self.df_variables.keys():
-            if multichoice_pattern.search(col):
-                base = col.rsplit("_", 1)[0]
-                if base in self.df_variables.keys():
-                    groups[base].append(col)
-                    if base in singlechoice_cols:
-                        singlechoice_cols.remove(base)
+        for col in all_cols:
+            m = suffix_pattern.match(col)
+            if m:
+                groups[m.group("base")].append(col)
+            else:
+                groups[col]  # ensure base-only vars appear
 
         specs = {}
 
-        # Multichoice variables
-        for base, cols in groups.items():
-            specs[base] = VariableSpec(
-                name=base,
-                kind="multichoice",
-                columns=sorted(cols),
-            )
+        for base, suffixed_cols in groups.items():
+            has_base = base in all_cols
+            n_suffix = len(suffixed_cols)
+            # ----------------------------
+            # Case 1: pure text
+            # ----------------------------
+            if not has_base and n_suffix == 1:
+                specs[base] = VariableSpec(
+                    name=base,
+                    kind="text",
+                    columns=suffixed_cols,
+                )
 
-        # Singlechoice variables
-        for col in singlechoice_cols:
-            specs[col] = VariableSpec(
-                name=col,
-                kind="singlechoice",
-            )
+            # ----------------------------
+            # Case 2: singlechoice + text
+            # ----------------------------
+            elif has_base and n_suffix == 1:
+                specs[base] = VariableSpec(
+                    name=base,
+                    kind="singlechoice_text",
+                    columns=[base] + suffixed_cols,
+                )
+
+            # ----------------------------
+            # Case 3: multichoice
+            # ----------------------------
+            elif has_base and n_suffix > 1:
+                specs[base] = VariableSpec(
+                    name=base,
+                    kind="multichoice",
+                    columns=sorted(suffixed_cols),
+                )
+
+            # ----------------------------
+            # Case 4: normal singlechoice
+            # ----------------------------
+            elif has_base and n_suffix == 0:
+                specs[base] = VariableSpec(
+                    name=base,
+                    kind="singlechoice",
+                    columns=[base],
+                )
+
+            # ----------------------------
+            # Anything else = malformed schema
+            # ----------------------------
+            else:
+                raise ValueError(
+                    f"Invalid variable structure for '{base}': "
+                    f"base={has_base}, suffixes={suffixed_cols}"
+                )
 
         return specs
 
@@ -145,6 +194,8 @@ class SurveySchema:
             if isinstance(var, VariableSpec):
                 if var.kind == "multichoice":
                     cols.extend(var.columns)
+                elif var.kind == "singlechoice_text":
+                    cols.extend(var.columns)  # base + text columns
                 else:
                     cols.append(var.name)
             else:
@@ -169,7 +220,6 @@ class SurveySchema:
 
     def short_label(self, var):
         return self.short_labels.get(var, var)
-    
     
 def make_short_label(text, max_words=5):
     if not isinstance(text, str):

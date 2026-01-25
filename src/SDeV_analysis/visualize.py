@@ -28,6 +28,7 @@ class SurveyPlotter:
         wrap_width=20,
         rotate=0,
         path=None,
+        singlechoice_text_mode="ignore",
         **kwargs
     ):
         """
@@ -90,6 +91,14 @@ class SurveyPlotter:
                     if var.kind == "singlechoice":
                         self._plot_singlechoice(ax, df_filtered, var, orient, **kwargs)
                         title_var = var.long_name
+                        
+                    elif var.kind == "singlechoice_text":
+                        mode = kwargs.pop("singlechoice_text_mode", "ignore")
+                        self._plot_singlechoice_text(
+                            ax, df_filtered, var, orient, mode=mode, **kwargs
+                        )
+                        title_var = var.long_name
+
                     elif var.kind == "multichoice":
                         self._plot_multichoice(ax, df_filtered, var, orient, **kwargs)
                         title_var = var.name
@@ -155,6 +164,120 @@ class SurveyPlotter:
             count = (df[col].astype(float) == 2).sum()
 
             rows.append({label: option_label, "count": count})
+
+        df_plot = pd.DataFrame(rows)
+
+        self._barplot(ax, df_plot, label, orient, **kwargs)
+
+    def _plot_singlechoice_text(
+        self,
+        ax,
+        df,
+        var,
+        orient,
+        mode="ignore",
+        **kwargs,
+    ):
+        """
+        Plot singlechoice_text variables.
+
+        mode:
+        - "ignore": plot like singlechoice, ignore text columns
+        - "absorb": convert unique text answers into categories
+        """
+
+        base = var.name
+        text_cols = [c for c in var.columns if c != base]
+
+        if mode == "ignore":
+            # behave exactly like singlechoice
+            self._plot_singlechoice(ax, df, var, orient, **kwargs)
+            return
+
+        if mode != "absorb":
+            raise ValueError(
+                f"Unknown singlechoice_text_mode '{mode}' "
+                "(use 'ignore' or 'absorb')"
+            )
+
+        # --------------------------------------------------
+        # ABSORB MODE (plot-time only)
+        # --------------------------------------------------
+
+        df_local = df.copy()
+
+        value_map = self.df_variables[base].values[1]
+
+        # find next available numeric code
+        existing_codes = [
+            int(k) for k in value_map.keys() if str(k).isdigit()
+        ]
+        next_code = max(existing_codes, default=0) + 1
+
+        # collect unique text answers across ALL text columns
+        texts = []
+        for col in text_cols:
+            texts.append(df_local[col])
+
+        texts = (
+            pd.concat(texts, axis=0)
+            .dropna()
+            .astype(str)
+            .str.strip()
+        )
+        texts = texts[texts != ""]
+
+        unique_texts = sorted(texts.unique())
+
+        # build temporary label map
+        temp_value_map = dict(value_map)  # copy, do NOT mutate schema
+        text_to_code = {}
+
+        for txt in unique_texts:
+            code = next_code
+            next_code += 1
+            temp_value_map[str(code)] = txt
+            text_to_code[txt] = code
+
+        # inject codes into base variable
+        for col in text_cols:
+            for txt, code in text_to_code.items():
+                mask = df_local[col].astype(str).str.strip() == txt
+                df_local.loc[mask, base] = code
+
+        # --------------------------------------------------
+        # plot using normal singlechoice logic
+        # --------------------------------------------------
+
+        self._plot_singlechoice_with_custom_labels(
+            ax,
+            df_local,
+            base,
+            temp_value_map,
+            orient,
+            **kwargs,
+        )
+    def _plot_singlechoice_with_custom_labels(
+        self,
+        ax,
+        df,
+        base_var,
+        value_map,
+        orient,
+        **kwargs,
+    ):
+        rows = []
+
+        label = self.schema.short_label(base_var)
+
+        for code_str, text in value_map.items():
+            try:
+                code = int(code_str)
+            except ValueError:
+                continue
+
+            count = (df[base_var] == code).sum()
+            rows.append({label: text, "count": count})
 
         df_plot = pd.DataFrame(rows)
 

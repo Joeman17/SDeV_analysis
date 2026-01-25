@@ -204,21 +204,35 @@ class SurveyAnalysis:
     
     def _collect_required_columns(self, variables, filters=None):
         """
-        Resolve all dataframe columns required for variables + filters.
+        Resolve all dataframe columns required for variables + filters,
+        including numeric-suffix free-text columns (e.g. Axyz_1, Axyz_2).
         """
         cols = set()
 
+        # We need access to *all* available columns
+        all_columns = set(self.schema.df_variables.keys())
+
+        # --------------------
         # variables
+        # --------------------
         for var in variables:
             if hasattr(var, "kind"):  # VariableSpec
                 if var.kind == "multichoice":
                     cols.update(var.columns)
                 else:
                     cols.add(var.name)
+                    cols.update(
+                        self._expand_text_suffix_columns(var.name, all_columns)
+                    )
             else:
                 cols.add(var)
+                cols.update(
+                    self._expand_text_suffix_columns(var, all_columns)
+                )
 
+        # --------------------
         # filters
+        # --------------------
         if filters:
             for filt in filters:
                 if isinstance(filt.variable, list):
@@ -227,6 +241,13 @@ class SurveyAnalysis:
                     cols.add(filt.variable)
 
         return cols
+    
+    def _expand_text_suffix_columns(self, base_var, all_columns):
+        """
+        Find columns like Axyz_1, Axyz_2, ... for a base variable Axyz.
+        """
+        pattern = re.compile(rf"^{re.escape(base_var)}_[0-9]+$")
+        return {c for c in all_columns if pattern.match(c)}
 
 # class Analysis:
 #     def __init__(self, api_link: str):
@@ -681,17 +702,19 @@ class SurveyAnalysis:
 
 #         return max(height, min_height)
     
-def resolve_columns(variables):
-    """
-    Converts variables (str | VariableSpec) into a flat list of column names.
-    """
-    cols = []
-    for var in variables:
-        if isinstance(var, VariableSpec):
-            if var.kind == "singlechoice":
-                cols.append(var.name)
-            elif var.kind == "multichoice":
-                cols.extend(var.columns)
-        else:
-            cols.append(var)
-    return cols
+# def resolve_columns(variables):
+#     """
+#     Converts variables (str | VariableSpec) into a flat list of column names.
+#     """
+#     cols = []
+#     for var in variables:
+#         if isinstance(var, VariableSpec):
+#             if var.kind == "singlechoice":
+#                 cols.append(var.name)
+#             elif var.kind == "singlechoice_text":
+#                 cols.extend(var.columns)  # base + text columns
+#             elif var.kind == "multichoice":
+#                 cols.extend(var.columns)
+#         else:
+#             cols.append(var)
+#     return cols
