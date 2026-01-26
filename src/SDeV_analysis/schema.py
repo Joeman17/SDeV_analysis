@@ -170,7 +170,12 @@ class SurveySchema:
         try:
             label = self.df_variables[col].values[0]
             if isinstance(label, str):
-                return label.split("(")[0].strip()
+                new_label = label.split("(")[0].strip()
+                # for key in self.df_variables.keys():
+                #     print(key, col, new_label)
+                #     if key != col and new_label in self.df_variables[key].values[0]:                    
+                #         return label  # avoid returning another variable name
+                return new_label
         except Exception:
             pass
         return col
@@ -214,7 +219,11 @@ class SurveySchema:
                 short[var] = MANUAL_SHORTNAMES[var]
                 continue
 
-            short[var] = make_short_label(label)
+            new_label = make_short_label(label)
+            for key in self.df_variables.keys():
+                if key != var and new_label in self.df_variables[key].values[0]:
+                    new_label = label  # avoid returning another variable name
+            short[var] = new_label
 
         self.short_labels = short
 
@@ -236,7 +245,7 @@ def make_short_label(text, max_words=5):
         "oder": "/",
         "und": "&",
         "beziehungsweise": "/",
-        "kommunalpolitisch": "",
+        "kommunalpolitisch": "kopo",
         "öffentliche oder gesellschaftliche": "öffentliche",
     }
 

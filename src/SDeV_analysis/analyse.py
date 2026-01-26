@@ -19,10 +19,12 @@ OP_MAP = {
     ">=": operator.ge,
     "<": operator.lt,
     "<=": operator.le,
+    "in": lambda s, v: s.isin(v),
+    "not in": lambda s, v: ~s.isin(v),
 }
 
 class Filter(object):
-    def __init__(self, variable, condition_func, condition, name=None):
+    def __init__(self, variable, condition_func, condition, mode="or", name=None):
         """
         Docstring for __init__
         
@@ -35,7 +37,11 @@ class Filter(object):
         self.condition = condition
         self.variable = variable
         self.condition_func = self.handle_condition_func(condition_func)
+        self.mode = mode
         self.name = name
+
+        if self.mode not in ("and", "or"):
+            raise ValueError("mode must be 'and' or 'or'")
 
     def handle_condition_func(self, condition_func):
         if isinstance(condition_func, str):
@@ -48,16 +54,31 @@ class Filter(object):
             return condition_func
 
     def apply(self, df):
+        # ----------------------------------------
+        # MULTI-CONDITION
+        # ----------------------------------------
         if isinstance(self.condition, list):
-            if len(self.condition) == len(self.condition_func) == len(self.variable):
-                result = pd.Series([True] * len(df))
+            if not (len(self.condition) == len(self.condition_func) == len(self.variable)):
+                raise ValueError(
+                    "Length of condition, condition_func, and variable lists must be the same."
+                )
+
+            if self.mode == "and":
+                result = pd.Series(True, index=df.index)
                 for var, cond_func, cond in zip(self.variable, self.condition_func, self.condition):
                     result &= cond_func(df[var], cond)
-                return result
-            else:
-                raise ValueError("Length of condition, condition_func, and variable lists must be the same.")
-        else:
-            return self.condition_func(df[self.variable], self.condition)
+
+            else:  # OR
+                result = pd.Series(False, index=df.index)
+                for var, cond_func, cond in zip(self.variable, self.condition_func, self.condition):
+                    result |= cond_func(df[var], cond)
+
+            return result
+
+        # ----------------------------------------
+        # SINGLE CONDITION
+        # ----------------------------------------
+        return self.condition_func(df[self.variable], self.condition)
 
 class SurveyAnalysis:
     def __init__(self, client, schema):
