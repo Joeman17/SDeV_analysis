@@ -142,7 +142,12 @@ class SurveyAnalysis:
 
         raw = self.client.send_json(params=params).json()["data"]
         df = pd.DataFrame(raw).transpose()
-
+        df["REF"] = (
+            df["REF"]
+            .fillna("")        # restore empty
+            .astype(str)
+            .str.strip()
+        )
         df_response_rate = pd.concat(
             [
                 df["REF"].value_counts(),
@@ -161,7 +166,7 @@ class SurveyAnalysis:
             .min()
             .set_index("REF"),
             on="REF",
-            how="left",
+            how="outer",
         ).rename(columns={"STARTED": "Veröffentlicht"})
 
         df_response_rate["Veröffentlicht"] = pd.to_datetime(
@@ -188,7 +193,7 @@ class SurveyAnalysis:
                 .str.lower()
             )
         merged_pd = pd.merge(
-            link_pd, response_rate_pd, on="Ref", how="left"
+            link_pd, response_rate_pd, on="Ref", how="outer"
         )
 
         merged_pd = (
