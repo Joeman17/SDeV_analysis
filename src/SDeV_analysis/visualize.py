@@ -159,7 +159,6 @@ class SurveyPlotter:
                     if hasattr(var, "kind"):
                         if var.kind == "singlechoice":
                             self._plot_singlechoice(ax, df_filtered, var, orient, percent=percent, **kwargs_non_countplot)
-                            title_var = var.long_name
 
                         elif var.kind == "singlechoice_text":
                             self._plot_singlechoice_text(
@@ -168,16 +167,13 @@ class SurveyPlotter:
                                 percent=percent,
                                 **kwargs_non_countplot
                             )
-                            title_var = var.long_name
 
                         elif var.kind == "multichoice":
                             self._plot_multichoice(ax, df_filtered, var, orient, percent=percent, **kwargs_non_countplot)
-                            title_var = self.schema.short_label(var.name)
                         else:
                             continue
                     else:
                         self._plot_string_variable(ax, df_filtered, var, orient, **kwargs_non_countplot)
-                        title_var = var
                         try:
                             title_var = self.schema.short_label(var)
                         except Exception:
@@ -520,7 +516,6 @@ class SurveyPlotter:
         singlechoice_text_mode="ignore",
         **kwargs,
     ):
-        label = self.schema.short_label(var.name)
         all_rows = []
 
         for filt, df_filtered in filters:
