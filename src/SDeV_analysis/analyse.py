@@ -220,6 +220,10 @@ class SurveyAnalysis:
         merged_pd = merged_pd.astype({"Aufrufe": "int64", "Rückläufe": "int64"})
         merged_pd.loc['Total', "Aufrufe"] = merged_pd[merged_pd.index != "Total"]["Aufrufe"].astype("int64").sum()
         merged_pd.loc['Total', "Rückläufe"] = merged_pd[merged_pd.index != "Total"]["Rückläufe"].astype("int64").sum()
+        merged_pd.loc["Total", "Organisation"] = "Summe"
+        merged_pd.loc["Total", "Nutzung"] = ""
+        merged_pd.loc["Total", "Veröffentlicht"] = ""
+        merged_pd.loc["Total", "Ref"] = ""
 
         return merged_pd
     

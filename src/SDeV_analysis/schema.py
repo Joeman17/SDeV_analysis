@@ -2,7 +2,7 @@ import re
 from collections import defaultdict
 
 class VariableSpec:
-    def __init__(self, name, kind="singlechoice", columns=None, long_name=None):
+    def __init__(self, name, kind="singlechoice", columns=None, long_name=None, zero_codes=None):
         """
         name: logical base variable name
         kind: "singlechoice" or "multichoice"
@@ -13,16 +13,33 @@ class VariableSpec:
         self.kind = kind
         self.columns = columns or []
         self.long_name = long_name or name
+        self.zero_codes = zero_codes or set()
+
 
     def __repr__(self):
-        return f"VariableSpec(name={self.name!r}, kind={self.kind!r})"
-
+        return (
+            f"VariableSpec(name={self.name!r}, kind={self.kind!r}, "
+            f"zero_codes={sorted(self.zero_codes)})"
+        )
 
 class SurveySchema:
     def __init__(self, df_variables):
         """
         df_variables: DataFrame returned from the API 'variables' endpoint
         """
+        self.ZERO_KEYWORDS = {
+            "nein",
+            "nicht",
+            "keine",
+            "kein",
+            "nicht interessiert",
+            "nicht zutreffend",
+            "trifft nicht zu",
+            "weiß nicht",
+            "weiss nicht",
+            "keine angabe",
+            "keine angaben",
+        }
         self.df_variables = df_variables
 
         self.specs = self._init_specs()
@@ -85,30 +102,41 @@ class SurveySchema:
             # Case 2: singlechoice + text
             # ----------------------------
             elif has_base and n_suffix == 1:
+                zero_codes = self._detect_zero_codes(base)
+
                 specs[base] = VariableSpec(
                     name=base,
                     kind="singlechoice_text",
                     columns=[base] + suffixed_cols,
+                    zero_codes=zero_codes,
                 )
 
             # ----------------------------
             # Case 3: multichoice
             # ----------------------------
             elif has_base and n_suffix > 1:
+                zero_codes = set()
+                for col in suffixed_cols:
+                    zero_codes |= self._detect_zero_codes(col)
+
                 specs[base] = VariableSpec(
                     name=base,
                     kind="multichoice",
                     columns=sorted(suffixed_cols),
+                    zero_codes=zero_codes,
                 )
 
             # ----------------------------
             # Case 4: normal singlechoice
             # ----------------------------
             elif has_base and n_suffix == 0:
+                zero_codes = self._detect_zero_codes(base)
+
                 specs[base] = VariableSpec(
                     name=base,
                     kind="singlechoice",
                     columns=[base],
+                    zero_codes=zero_codes,
                 )
 
             # ----------------------------
@@ -121,6 +149,35 @@ class SurveySchema:
                 )
 
         return specs
+
+    def _detect_zero_codes(self, var_name):
+        """
+        Inspect df_variables[var_name].values[1] (code → label)
+        and return a set of codes that represent explicit zero / negative answers.
+        """
+        zero_codes = set()
+
+        try:
+            value_map = self.df_variables[var_name].values[1]
+        except Exception:
+            return zero_codes
+
+        if not isinstance(value_map, dict):
+            return zero_codes
+
+        for code_str, label in value_map.items():
+            if not isinstance(label, str):
+                continue
+
+            label_lc = label.lower()
+
+            if any(kw in label_lc for kw in self.ZERO_KEYWORDS):
+                try:
+                    zero_codes.add(int(code_str))
+                except ValueError:
+                    continue
+
+        return zero_codes
 
     # ------------------------------------------------------------------
     # Label cleanup (extracted from Analysis.beautify_variable_labels)
@@ -230,7 +287,7 @@ class SurveySchema:
     def short_label(self, var):
         return self.short_labels.get(var, var)
     
-def make_short_label(text, max_words=5):
+def make_short_label(text, max_words=8):
     if not isinstance(text, str):
         return text
 
@@ -242,18 +299,19 @@ def make_short_label(text, max_words=5):
 
     # replacements
     replacements = {
-        "oder": "/",
-        "und": "&",
+        " oder ": " / ",
+        " und ": " & ",
         "beziehungsweise": "/",
-        "kommunalpolitisch": "kopo",
+        # "kommunalpolitisch": "kopo",
         "öffentliche oder gesellschaftliche": "öffentliche",
+        "Ich habe": "",
     }
 
     for k, v in replacements.items():
         text = text.replace(k, v)
 
     # cut after comma
-    text = text.split(",")[0]
+    #text = text.split(",")[0]
 
     # limit words
     words = text.split()
@@ -264,5 +322,4 @@ def make_short_label(text, max_words=5):
     
 MANUAL_SHORTNAMES = {
     "A502_01": "Frauen",
-    "A502_02": "Migration",
 }

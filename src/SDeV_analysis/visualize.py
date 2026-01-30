@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import re
+import textwrap
 from collections import defaultdict
 
 from .utils import wrap_and_count
@@ -33,6 +34,8 @@ class SurveyPlotter:
         singlechoice_text_mode="ignore",
         percent=False,
         fix_yaxis=False,
+        show_yaxis=True,
+        show_values=True,
         **kwargs
     ):
         """
@@ -85,7 +88,11 @@ class SurveyPlotter:
                                     y_max = max(y_max, (df_filtered[col].astype(float) == 2).sum())
                         else:
                             y_max = max(y_max, len(df_filtered))
-
+        if fix_yaxis:
+            if percent:
+                y_ticks = np.arange(0, 101, 20)   # 0,20,40,60,80,100
+            else:
+                y_ticks = None  # optional: can compute dynamically
         # --------------------------------------------------------------
         # Estimate row heights
         # --------------------------------------------------------------
@@ -133,12 +140,13 @@ class SurveyPlotter:
 
             for i, var in enumerate(variables):
                 ax = axes[i, j]
-                self._configure_axis(ax, is_left=(j == 0))
+                self._configure_axis(ax, is_left=(j == 0), show_yaxis=show_yaxis)
 
                 # if filters share the same variable, do grouped plot
                 if isinstance(var, VariableSpec) and len(filters_by_var[key]) > 1:
-                    
-                    self._grouped_countplot(ax, df_filtered, var, filters_by_var[key], orient=orient, percent=percent, **kwargs_countplot)
+                    grouped_kwargs = kwargs_countplot.copy()
+                    grouped_kwargs.pop("color", None)     # ← critical
+                    self._grouped_countplot(ax, df_filtered, var, filters_by_var[key], orient=orient, percent=percent, **grouped_kwargs)
                     if isinstance(filt.variable, list):
                         filter_names = [self.schema.specs[v].long_name if v in self.schema.specs else self.schema.specs[v.split("_")[0]].long_name for v in list(set(filt.variable))]
                         sub_title = f"Filter: " + f" {filt.mode} ".join(filter_names)
@@ -174,17 +182,51 @@ class SurveyPlotter:
                             title_var = self.schema.short_label(var)
                         except Exception:
                             pass
-                    ax.set_title(f"{title_var}  N={len(df_filtered)} ({filter_name})")
+
+                    if var.name in df_filtered.keys():
+
+                        sub_title = f"Filter: {filter_name} (N={len(df_filtered[var.name].dropna())})"
+                    elif var.columns[0] in df_filtered.keys():
+                        sub_title = f"Filter: {filter_name} (N={len(df_filtered[var.columns[0]].dropna())})"
+                    else:
+                        sub_title = f"Filter: {filter_name} (N={len(df_filtered)})"
+
+                    ax.set_title(sub_title)
+
+                labels = (
+                    [t.get_text() for t in ax.get_xticklabels()]
+                    if orient == "v"
+                    else [t.get_text() for t in ax.get_yticklabels()]
+                )
+
+                wrapped_labels = [
+                    self._wrap_and_clamp_label(lbl, width=wrap_width, max_lines=2)
+                    for lbl in labels
+                ]
+                is_grouped = len(ax.containers) > 1
+                if show_values and not is_grouped:
+                    self._annotate_bars(ax, orient=orient, percent=percent)
+
+                self._set_category_labels(ax, wrapped_labels, orient)
 
                 # rotate labels
                 self._rotate_category_labels(ax, orient, rotate)
-
+                # add reference grid
+                self._add_reference_grid(ax, orient)
                 # fix y axis
+                if y_ticks is None:
+                    y_ticks = range(len(labels))
                 if fix_yaxis and y_max is not None:
                     if orient == "v":
                         ax.set_ylim(0, y_max * 1.05)
+                        if percent:
+                            ax.set_yticks(y_ticks)
+                            ax.set_yticklabels([f"{t}%" for t in y_ticks])
                     else:
                         ax.set_xlim(0, y_max * 1.05)
+                        if percent:
+                            ax.set_xticks(y_ticks)
+                            ax.set_xticklabels([f"{t}%" for t in y_ticks])
 
 
                 if j == 0:
@@ -206,7 +248,16 @@ class SurveyPlotter:
         else:
             plt.show()
 
-    def heatmap_summary(self, filtered_dfs, variables, percent=False, path=None):
+    def heatmap_summary(
+        self,
+        filtered_dfs,
+        variables,
+        percent=False,
+        path=None,
+        cmap="Blues",
+        rotate_x=0,
+        rotate_y=0,
+    ):
         rows = []
 
         for filt, df_filtered in filtered_dfs:
@@ -216,15 +267,12 @@ class SurveyPlotter:
             for var in variables:
 
                 # -------- VariableSpec ----------
-                if isinstance(var, VariableSpec):
-
+                if hasattr(var, "kind"):
                     if var.kind in ("singlechoice", "singlechoice_text"):
-                        count = df_filtered[var.name].notna().sum()
+                        count = self._count_effective_positive(df_filtered, var)
 
                     elif var.kind == "multichoice":
-                        count = 0
-                        for col in var.columns:
-                            count += (df_filtered[col].astype(float) == 2).sum()
+                        count = self._count_multichoice_positive(df_filtered, var)
 
                     else:
                         continue
@@ -235,8 +283,7 @@ class SurveyPlotter:
                 else:
                     count = df_filtered[var].notna().sum()
                     label = var
-
-                value = count / total * 100 if percent else count
+                value = float(count) / total * 100 if percent else count
 
                 rows.append({
                     "Variable": label,
@@ -255,21 +302,40 @@ class SurveyPlotter:
             aggfunc=aggfunc
         )
 
-        plt.figure(figsize=(12, 8))
+        fig, ax = plt.subplots(figsize=(12, 8))
+
         sns.heatmap(
             df_heat,
             annot=True,
             fmt=".1f" if percent else "d",
-            cmap="Blues",
+            cmap=cmap,
+            ax=ax,
         )
-        plt.title("Survey Summary Heatmap")
+
+        # --- rotate labels safely ---
+        if rotate_x != 0:
+            ax.set_xticklabels(
+                ax.get_xticklabels(),
+                rotation=rotate_x,
+                ha="right" if rotate_x > 0 else "center",
+            )
+
+        if rotate_y != 0:
+            ax.set_yticklabels(
+                ax.get_yticklabels(),
+                rotation=rotate_y,
+                va="center",
+            )
+
+        ax.set_title("Survey Summary Heatmap")
+
         plt.tight_layout()
+
         if path:
             plt.savefig(path)
             plt.close()
         else:
             plt.show()
-
     # ------------------------------------------------------------------
     # Plot helpers
     # ------------------------------------------------------------------
@@ -466,7 +532,13 @@ class SurveyPlotter:
                 singlechoice_text_mode=singlechoice_text_mode,
             )
 
-            counts["Filter"] = f"{filter_name} (N={len(df_filtered)})"
+            if var.name in df_filtered.keys():
+                legend_name = f"{filter_name} (N={len(df_filtered[var.name].dropna())})"
+            elif var.columns[0] in df_filtered.keys():
+                legend_name = f"{filter_name} (N={len(df_filtered[var.columns[0]].dropna())})"
+            else:
+                legend_name = f"{filter_name} (N={len(df_filtered)})"
+            counts["Filter"] = legend_name
             all_rows.append(counts)
 
         plot_df = pd.concat(all_rows, ignore_index=True)
@@ -497,13 +569,27 @@ class SurveyPlotter:
     # Axis & layout helpers
     # ------------------------------------------------------------------
 
-    def _configure_axis(self, ax, is_left):
-        if not is_left:
-            ax.tick_params(left=False)
-            ax.get_yaxis().set_visible(False)
+    def _set_category_labels(self, ax, labels, orient):
+        if orient == "h":
+            positions = range(len(labels))
+            ax.set_yticks(positions)
+            ax.set_yticklabels(labels)
         else:
-            ax.tick_params(left=True)
-            ax.get_yaxis().set_visible(True)
+            positions = range(len(labels))
+            ax.set_xticks(positions)
+            ax.set_xticklabels(labels)
+
+    def _configure_axis(self, ax, is_left, show_yaxis=True):
+        if not is_left:
+            ax.tick_params(
+                left=show_yaxis,
+                labelleft=False
+            )
+        else:
+            ax.tick_params(
+                left=True,
+                labelleft=True
+            )
 
     def _ensure_2d_axes(self, axes, n_rows, n_cols):
         if n_rows == 1 and n_cols == 1:
@@ -513,6 +599,31 @@ class SurveyPlotter:
         if n_cols == 1:
             return axes[:, np.newaxis]
         return axes
+
+    def _add_reference_grid(self, ax, orient):
+        ax.set_axisbelow(True)
+        if orient == "v":
+            ax.yaxis.grid(
+                True,
+                linestyle="--",
+                linewidth=0.6,
+                alpha=0.6
+            )
+        else:
+            ax.xaxis.grid(
+                True,
+                linestyle="--",
+                linewidth=0.6,
+                alpha=0.6
+            )
+
+    def _annotate_bars(self, ax, orient="v", percent=False):
+        for container in ax.containers:
+            ax.bar_label(
+                container,
+                fmt="%.1f%%" if percent else "%d",
+                padding=2
+            )
 
     def _resolve_filter_name(self, filt):
         if filt.name is not None:
@@ -546,6 +657,17 @@ class SurveyPlotter:
             ax.tick_params(axis="y", labelrotation=rotate)
             for label in ax.get_yticklabels():
                 label.set_va("center")
+
+                
+    def _wrap_and_clamp_label(self, label, width=20, max_lines=2):
+        wrapped = textwrap.wrap(label, width=width)
+
+        if len(wrapped) <= max_lines:
+            return "\n".join(wrapped)
+
+        truncated = wrapped[:max_lines]
+        truncated[-1] = truncated[-1].rstrip() + "…"
+        return "\n".join(truncated)
 
     def _collect_counts(self, df, var, percent=False, singlechoice_text_mode="ignore"):
         """
@@ -624,6 +746,34 @@ class SurveyPlotter:
 
         return pd.DataFrame(rows)
 
+    def _count_effective_positive(self, df, var):
+        """
+        Returns number of 'positive' answers
+        (explicit zero answers are excluded)
+        """
+        series = df[var.name]
+
+        # drop NA
+        series = series.dropna()
+
+        # handle zero codes if defined
+        zero_codes = getattr(var, "zero_codes", None)
+        if zero_codes is not None:
+            series = series[~series.isin(zero_codes)]
+
+        return len(series)
+    
+    def _count_multichoice_positive(self, df, var):
+        count = 0
+
+        for col in var.columns:
+            if not int(col.split("_")[-1]) in getattr(var, "zero_codes", []):
+                series = pd.to_numeric(df[col], errors="coerce")
+
+                series = series.dropna()
+                count += (series == 2).sum()
+
+        return count
     # ------------------------------------------------------------------
     # Height estimation (unchanged logic)
     # ------------------------------------------------------------------
@@ -637,7 +787,6 @@ class SurveyPlotter:
         line_increment=0.12,
         min_height=1.2,
     ):
-        import textwrap
 
         # correct number of categories
         if hasattr(var, "kind") and var.kind == "singlechoice":
@@ -721,6 +870,8 @@ def wrap_yticks(ax, width=35):
         line_counts.append(n)
 
     max_lines = max(line_counts)
+    ticks = ax.get_yticks()
+    ax.set_yticks(ticks)
     ax.set_yticklabels(wrapped_labels)
     return max_lines
 
