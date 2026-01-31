@@ -516,6 +516,7 @@ class SurveyPlotter:
         singlechoice_text_mode="ignore",
         **kwargs,
     ):
+        label = self.schema.short_label(var.name)
         all_rows = []
 
         for filt, df_filtered in filters:
